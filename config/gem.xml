@@ -1,0 +1,56 @@
+<?xml version="1.0"?>
+<nullmax>
+  <calibration>
+    <lidar 
+      topic_name="/velodyne_16/left/velodyne_compensated_points" 
+      use_euler_angles="false">
+      <translation 
+        x="1.66" 
+        y="0.55" 
+        z="1.17" /><!-- m -->
+      <angles 
+        r="0." 
+        p="0." 
+        y="0." /><!-- degree -->
+      <quaternion 
+        w="1." 
+        x="0." 
+        y="0." 
+        z="0." />
+    </lidar>
+    <lidar 
+      topic_name="/velodyne_16/right/velodyne_compensated_points" 
+      use_euler_angles="false">
+      <translation 
+        x="1.72401" 
+        y="-0.641466" 
+        z="1.21124" /><!-- m -->
+      <angles 
+        r="0.1" 
+        p="1.0" 
+        y="12." /><!-- degree -->
+      <quaternion 
+        w="0.985839" 
+        x="0.0111065" 
+        y="0.00372763" 
+        z="0.167286" />
+    </lidar>
+    <imu 
+      topic_name="/imu/data" 
+      use_euler_angles="false">
+      <translation 
+        x="0" 
+        y="0" 
+        z="0.5" /><!-- m -->
+      <angles 
+        r="0." 
+        p="1.0" 
+        y="12." /><!-- degree -->
+      <quaternion 
+        w="0.707" 
+        x="0" 
+        y="0" 
+        z="-0.707" />
+    </imu>
+  </calibration>
+</nullmax>

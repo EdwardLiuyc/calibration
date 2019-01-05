@@ -1,0 +1,4 @@
+<launch>
+    <node pkg="l2l_calib" type="l2l_calib_node" name="l2l_calib_node" output="screen">
+    </node>
+</launch>
