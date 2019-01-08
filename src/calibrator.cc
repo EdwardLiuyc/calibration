@@ -4,6 +4,7 @@
 #include "pcl/filters/statistical_outlier_removal.h"
 
 #include "cost_function.h"
+#include "ceres/local_parameterization.h"
 
 using l2l_calib::common::RotationMatrixToEulerAngles;
 using l2l_calib::common::EulerAnglesToRotationMatrix;
@@ -59,7 +60,7 @@ void Calibrator::Initialise( ros::NodeHandle& nh,
   auto& imu_settings = settings.imu_settings;
 
   // settings for lidar
-  CHECK_GE( lidar_settings.size(), 2 );
+  CHECK_GE( lidar_settings.size(), 1 );
   CHECK_LE( imu_settings.size(), 1 );
   lidars_.resize( lidar_settings.size() );
   for( size_t i = 0; i < lidar_settings.size(); ++i ) {
@@ -77,9 +78,10 @@ void Calibrator::Initialise( ros::NodeHandle& nh,
      std::bind(&Calibrator::ScanMatching, this ) );
 
   if( !imu_settings.empty() ) {
-    imus_.resize(imu_settings.size());
-    imus_motion_data_.resize(imu_settings.size());
-    for( size_t i = 0; i < imu_settings.size(); ++i ) {
+    auto imus_count = imu_settings.size();
+    imus_.resize(imus_count);
+    imus_motion_data_.resize(imus_count);
+    for( size_t i = 0; i < imus_count; ++i ) {
       Eigen::Matrix4f tf_pose = Eigen::Matrix4f::Identity();
       tf_pose.block(0,0,3,3) = 
         Eigen::Matrix3f( imu_settings[i].quaternion.toRotationMatrix() );
@@ -278,8 +280,8 @@ void Calibrator::ImuCalibrating()
   last_imu_motions.resize(imu_size);
 
   using LidarPose = Imu::Pose;
-  std::queue<LidarPose> lidar_poses;
-  std::vector<std::queue<Imu::Pose>> imus_poses;
+  std::vector<LidarPose> lidar_poses;
+  std::vector<std::vector<Imu::Pose>> imus_poses;
   imus_poses.resize(imu_size);
 
 #define SKIP_LOOP \
@@ -295,9 +297,9 @@ void Calibrator::ImuCalibrating()
     {
       common::MutexLocker locker(&mutex_);
       current_cloud = clouds_for_imu_calib_.front();
+      auto size = clouds_for_imu_calib_.size();
       clouds_for_imu_calib_.pop();
       CHECK(current_cloud);
-      auto size = clouds_for_imu_calib_.size();
       for( size_t i = 0; i < imu_size; ++i ) {
         auto& imu_motion = imus_motion_data_[i];
         CHECK_EQ(size, imu_motion.size());
@@ -306,18 +308,21 @@ void Calibrator::ImuCalibrating()
       }
     }
     if( !got_first_data ) {
-      lidar_poses.push(LidarPose::Identity());
+      lidar_poses.push_back(LidarPose::Identity());
       last_cloud = current_cloud;
       for( size_t i = 0; i < imu_size; ++i ) {
         last_imu_motions[i] = current_imu_motions[i];
-        imus_poses[i].push(current_imu_motions[i].pose);
+        imus_poses[i].push_back(current_imu_motions[i].pose);
       }
       got_first_data = true;
       SKIP_LOOP;
     }
 
     // step2 skip useless data
-    if( current_imu_motions[0].velocity.norm() > 0.5 
+    // std::cout << current_imu_motions[0].velocity.norm() << " " 
+    //   << translation_of_two_pose(current_imu_motions[0].pose,
+    //         last_imu_motions[0].pose) << std::endl;
+    if( current_imu_motions[0].velocity.norm() > 3.
         || translation_of_two_pose(current_imu_motions[0].pose,
             last_imu_motions[0].pose) < 0.2 ) {
       SKIP_LOOP;
@@ -332,42 +337,109 @@ void Calibrator::ImuCalibrating()
     matcher->align( guess, result );
     PRINT_DEBUG_FMT("match score: %lf", matcher->getFitnessScore());
     auto last_lidar_pose = lidar_poses.back();
-    lidar_poses.push(last_lidar_pose*result);
+    lidar_poses.push_back(last_lidar_pose*result);
     // step3.2 get imus data 
     for( size_t i = 0; i < imu_size; ++i ) {
-      imus_poses[i].push(current_imu_motions[0].pose);
-      CHECK_EQ(imus_poses[i].size(), lidar_poses.size());
+      imus_poses[i].push_back(current_imu_motions[0].pose);
+      last_imu_motions[i] = current_imu_motions[i];
     }
+    last_cloud = current_cloud;
   }
 
   auto pose_size = lidar_poses.size();
   if( pose_size < 20 ) {
-    PRINT_ERROR("too few pose");
+    PRINT_ERROR_FMT("too few pose: %lu", pose_size);
     imu_calib_thread_running_ = false;
     return;
   }
 
-  std::vector<ceres::Problem> problems;
-  problems.resize(imu_size);
-  while( !lidar_poses.empty() ){
-    auto lidar_pose = lidar_poses.front();
-    lidar_poses.pop();
+  auto pose_to_array = 
+    []( Eigen::Matrix4f pose, double* array_6d ){
+      if(!array_6d) {
+        return;
+      }
+      Eigen::Vector6<double> vector6 = 
+        common::TransformToVector6(pose).cast<double>();
+      memcpy( array_6d, vector6.data(), sizeof(double)*6 ); 
+    };
 
-    for( size_t i = 0; i < imu_size; ++i ) {
-      auto& problem = problems[i];
-      auto& imu_poses = imus_poses[i];
-      auto imu_pose = imu_poses.front();
-      imu_poses.pop();
-      ceres::CostFunction* cost_function =
-        ModelImuToLidarCostFunctor::Create(lidar_pose, imu_pose);
+  auto pose_to_ceres_pose = 
+    []( const Eigen::Matrix4f& pose, CeresPose& ceres_pose ) {
+      ceres_pose.t = pose.block(0,3,3,1).cast<double>();
+      ceres_pose.q = Eigen::Quaterniond( 
+        Eigen::Matrix3d(pose.block(0,0,3,3).cast<double>()) );
+    };
 
-      problem.AddResidualBlock(cost_function, NULL,
-                              pose_begin_iter->second.p.data(),
-                              pose_begin_iter->second.q.coeffs().data(),
-                              pose_end_iter->second.p.data(),
-                              pose_end_iter->second.q.coeffs().data());
+  ceres::LocalParameterization* quaternion_local_parameterization =
+      new ceres::EigenQuaternionParameterization;
+  for( int j = 0; j < imu_size; j++ ) {
+    CHECK_EQ(imus_poses[j].size(), lidar_poses.size());
+    ceres::Problem problem;
+#if 0
+    double tf_lidar_base_link[6] = {0.};
+    double tf_imu_bask_link[6] = {0.};
+    pose_to_array( lidars_[0]->GetPose(), tf_lidar_base_link );
+    pose_to_array( imus_[j]->GetTfPose(), tf_imu_bask_link );
+    std::cout << std::setw(10) << "lidar" << " " << std::setw(10) 
+      << "imu" << std::endl;
+    for( int i = 0; i < 6; ++i ) {
+      std::cout << std::setw(10) << tf_lidar_base_link[i] << " " 
+        << std::setw(10) << tf_imu_bask_link[i] << std::endl;
     }
 
+    auto& imu_poses = imus_poses[j];
+    for( int i = 1; i < lidar_poses.size(); ++i ) {
+      auto delta_lidar = lidar_poses[i];
+      auto delta_imu   = imu_poses[i];
+      ceres::CostFunction* cost_function =
+        ModelImuToLidarCostFunctor::Create(delta_lidar, delta_imu);
+      problem.AddResidualBlock( cost_function, nullptr, 
+        tf_lidar_base_link, tf_imu_bask_link );
+    }
+#else
+    CeresPose tf_lidar_base_link, tf_imu_bask_link;
+    pose_to_ceres_pose( lidars_[0]->GetPose(), tf_lidar_base_link );
+    pose_to_ceres_pose( imus_[j]->GetTfPose(), tf_imu_bask_link );
+    std::cout << "lidar: " << tf_lidar_base_link.DebugString() << std::endl;
+    std::cout << "imu: " << tf_imu_bask_link.DebugString() << std::endl;
+
+    auto& imu_poses = imus_poses[j];
+
+    for( int i = 1; i < lidar_poses.size(); ++i ) {
+      auto delta_lidar = /* lidar_poses[i-1].inverse() * */lidar_poses[i];
+      auto delta_imu   = /* imu_poses[i-1].inverse() * */imu_poses[i];
+      ceres::CostFunction* cost_function =
+        ModelImuToLidarCostFunctorWithQuarternion::Create(delta_lidar, 
+          delta_imu);
+      problem.AddResidualBlock( cost_function, nullptr, 
+        tf_lidar_base_link.t.data(), tf_lidar_base_link.q.coeffs().data(),
+        tf_imu_bask_link.t.data(), tf_imu_bask_link.q.coeffs().data() );
+      problem.SetParameterization(tf_lidar_base_link.q.coeffs().data(),
+                                 quaternion_local_parameterization);
+      problem.SetParameterization(tf_imu_bask_link.q.coeffs().data(),
+                                 quaternion_local_parameterization);
+    }
+#endif
+    std::cout << "Solving the problem... " << std::endl;
+
+    ceres::Solver::Options options;
+    options.linear_solver_type = ceres::DENSE_QR;
+    options.minimizer_progress_to_stdout = true;
+    ceres::Solver::Summary summary;
+    ceres::Solve(options, &problem, &summary);
+
+    std::cout << "Finished sloving the problem " << std::endl;
+    std::cout << summary.BriefReport() << std::endl;
+
+#if 0
+    for( int i = 0; i < 6; ++i ) {
+      std::cout << std::setw(10) << tf_lidar_base_link[i] << " " 
+        << std::setw(10) << tf_imu_bask_link[i] << std::endl;
+    }
+#else 
+    std::cout << "lidar: " << tf_lidar_base_link.DebugString() << std::endl;
+    std::cout << "imu: " << tf_imu_bask_link.DebugString() << std::endl;
+#endif
   }
   
   PRINT_INFO("imu calibration thread exit.");

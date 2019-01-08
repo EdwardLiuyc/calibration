@@ -54,6 +54,8 @@ bool Imu::GetIntergratedPose( const SimpleTime& target_time,
   }
   gtsam::Rot3 last_rotation = imu_current_estimate_.deltaRij();
   gtsam::Vector3 last_position = imu_current_estimate_.deltaPij();
+  gtsam::Vector3 last_velocity = imu_current_estimate_.deltaVij();
+  velocity = last_velocity.cast<float>();
   
   Pose target_time_pose = Pose::Identity();
   target_time_pose.block(0,3,3,1) = last_position.cast<float>();

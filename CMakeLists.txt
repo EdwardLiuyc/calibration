@@ -20,9 +20,10 @@ find_package(catkin REQUIRED COMPONENTS
 
 find_package(PCL REQUIRED)
 find_package(glog)
-find_package(Boost COMPONENTS thread filesystem date_time system REQUIRED)
 find_package(Threads REQUIRED)
 find_package(GTSAM REQUIRED)
+find_package(Ceres REQUIRED)
+find_package(Eigen ${CERES_EIGEN_VERSION} EXACT QUIET)
 
 option(USE_OPENMP "Enable OpenMP?" ON) # set to OFF to disable
 if(USE_OPENMP)
@@ -36,10 +37,11 @@ if(USE_OPENMP)
  endif(OPENMP_FOUND OR OpenMP_FOUND)
 endif(USE_OPENMP)
 
-include_directories("/usr/include/eigen3")
+include_directories(${EIGEN_INCLUDE_DIR})
 include_directories(${Boost_INCLUDE_DIR})
 include_directories(${GTSAM_INCLUDE_DIR})
 include_directories(${PCL_INCLUDE_DIRS})
+include_directories(${CERES_INCLUDE_DIR})
 include_directories(
   src
   src/third_parties
@@ -60,4 +62,5 @@ target_link_libraries(${PROJECT_NAME}_node
   glog 
   pointmatcher
   gtsam
+  ceres
 )

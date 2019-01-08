@@ -18,7 +18,7 @@ class Imu {
 public:
   using LocalImuMsg = l2l_calib::sensors::ImuMsg;
   using Pose = Eigen::Matrix4f;
-  using Velocity3 = Eigen::Matrix3f;
+  using Velocity3 = Eigen::Vector3f;
 
   Imu(const Pose& tf_pose);
   ~Imu();
@@ -34,6 +34,9 @@ public:
   */
   bool GetIntergratedPose( const SimpleTime& time, 
     Pose& pose, Velocity3& velocity );
+
+  inline 
+  Pose GetTfPose() { return tf_pose_; }
 
 
 protected:

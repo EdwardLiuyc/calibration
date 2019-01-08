@@ -142,7 +142,6 @@ Eigen::Matrix<T,4,4> Vector6ToTransform( const Eigen::Vector6<T>& v )
   Eigen::AngleAxis<T> yaw_angle(v[5], Eigen::Matrix<T,3,1>::UnitZ());
   Eigen::AngleAxis<T> pitch_angle(v[4], Eigen::Matrix<T,3,1>::UnitY());
   Eigen::AngleAxis<T> roll_angle(v[3], Eigen::Matrix<T,3,1>::UnitX());
-
   Eigen::Quaternion<T> q = yaw_angle * pitch_angle * roll_angle;
 
   ret.template block<3,1>(0,3) = v.topRows(3);
